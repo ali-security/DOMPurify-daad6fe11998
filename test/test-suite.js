@@ -5385,5 +5385,137 @@
         );
       }
     );
+
+    QUnit.module('Regression — IN_PLACE trusts instance-level nodeName');
+
+    QUnit.test(
+      'IN_PLACE removes a <script> whose nodeName is overridden to "DIV"',
+      (assert) => {
+        // A live node handed to IN_PLACE can carry an own `nodeName`
+        // property that differs from its real tag. The allow/forbid
+        // decision must use the real tag name (read through the cached
+        // Node.prototype getter), not the instance-visible property.
+        const host = document.createElement('div');
+        const script = document.createElement('script');
+        script.textContent = 'window.xssed = true';
+        Object.defineProperty(script, 'nodeName', {
+          value: 'DIV',
+          configurable: true,
+        });
+        host.appendChild(script);
+
+        const result = DOMPurify.sanitize(host, { IN_PLACE: true });
+
+        assert.strictEqual(result, host, 'returns the same node');
+        assert.notOk(host.querySelector('script'), 'spoofed <script> removed');
+        assert.notOk(
+          /<script/i.test(host.innerHTML),
+          'no <script> serialized: ' + host.innerHTML
+        );
+      }
+    );
+
+    QUnit.test(
+      'IN_PLACE removes a cross-realm <script> whose nodeName is overridden to "DIV"',
+      (assert) => {
+        // Same as above, but the hostile node comes from a same-origin
+        // iframe, mirroring the advisory's foreign-window delivery vector.
+        const iframe = document.createElement('iframe');
+        document.body.appendChild(iframe);
+        const foreignDoc = iframe.contentDocument;
+
+        const host = foreignDoc.createElement('div');
+        const script = foreignDoc.createElement('script');
+        script.textContent = 'window.xssed = true';
+        Object.defineProperty(script, 'nodeName', {
+          value: 'DIV',
+          configurable: true,
+        });
+        host.appendChild(script);
+
+        DOMPurify.sanitize(host, { IN_PLACE: true });
+
+        assert.notOk(host.querySelector('script'), 'spoofed <script> removed');
+
+        document.body.removeChild(iframe);
+      }
+    );
+
+    QUnit.test(
+      'IN_PLACE refuses a <script> root whose nodeName is overridden to "DIV"',
+      (assert) => {
+        const script = document.createElement('script');
+        script.textContent = 'window.xssed = true';
+        Object.defineProperty(script, 'nodeName', {
+          value: 'DIV',
+          configurable: true,
+        });
+
+        assert.throws(
+          function () {
+            DOMPurify.sanitize(script, { IN_PLACE: true });
+          },
+          /root node is forbidden/,
+          'spoofed <script> root is rejected'
+        );
+      }
+    );
+
+    QUnit.test(
+      'IN_PLACE applies attribute rules of the real tag, not an overridden nodeName',
+      (assert) => {
+        // data: URIs in src/href are only kept on DATA_URI_TAGS such as
+        // <img>. An <a> whose nodeName is overridden to "IMG" must not be
+        // able to keep a data: href.
+        const host = document.createElement('div');
+        const anchor = document.createElement('a');
+        anchor.setAttribute(
+          'href',
+          'data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg=='
+        );
+        anchor.textContent = 'click';
+        Object.defineProperty(anchor, 'nodeName', {
+          value: 'IMG',
+          configurable: true,
+        });
+        host.appendChild(anchor);
+
+        DOMPurify.sanitize(host, { IN_PLACE: true });
+
+        assert.ok(host.querySelector('a'), 'real <a> is kept');
+        assert.notOk(
+          anchor.hasAttribute('href'),
+          'data: href removed from <a> despite spoofed IMG nodeName'
+        );
+      }
+    );
+
+    QUnit.test(
+      'uponSanitizeElement hook receives the real tag name, not an overridden nodeName',
+      (assert) => {
+        const seen = [];
+        DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+          if (data.tagName === 'script' || data.tagName === 'p') {
+            seen.push(data.tagName);
+          }
+        });
+
+        try {
+          const host = document.createElement('div');
+          const script = document.createElement('script');
+          Object.defineProperty(script, 'nodeName', {
+            value: 'P',
+            configurable: true,
+          });
+          host.appendChild(script);
+
+          DOMPurify.sanitize(host, { IN_PLACE: true });
+        } finally {
+          DOMPurify.removeHook('uponSanitizeElement');
+        }
+
+        assert.deepEqual(seen, ['script'], 'hook saw the real tag name');
+      }
+    );
   };
 });

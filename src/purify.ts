@@ -1326,7 +1326,9 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
     }
 
     /* Now let's check the element's type and name */
-    const tagName = transformCaseFunc(currentNode.nodeName);
+    const tagName = transformCaseFunc(
+      getNodeName ? getNodeName(currentNode) : currentNode.nodeName
+    );
 
     /*
      * Same clone-before-mutate guard as in _parseConfig, for hooks that
@@ -1734,8 +1736,13 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
         });
       }
 
-      /* Is `value` valid for this attribute? */
-      const lcTag = transformCaseFunc(currentNode.nodeName);
+      /* Is `value` valid for this attribute? Read the tag name through the
+         cached Node.prototype getter, as in _sanitizeElements, so an
+         instance-level `nodeName` override on a live IN_PLACE node cannot
+         change which per-tag attribute rules are applied. */
+      const lcTag = transformCaseFunc(
+        getNodeName ? getNodeName(currentNode) : currentNode.nodeName
+      );
       if (!_isValidAttribute(lcTag, lcName, value)) {
         _removeAttribute(name, currentNode);
         continue;
