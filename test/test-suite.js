@@ -1338,6 +1338,106 @@
         );
       }
     );
+
+    // Regression: GHSA-c2j3-45gr-mqc4. A custom element kept via
+    // CUSTOM_ELEMENT_HANDLING must run through afterSanitizeElements just
+    // like a normal allowlisted element, so a security policy layered in
+    // that hook is not silently skipped for kept custom elements.
+    QUnit.test(
+      'afterSanitizeElements fires on kept custom elements',
+      (assert) => {
+        const seen = [];
+        DOMPurify.addHook('afterSanitizeElements', (node) => {
+          if (node.tagName) {
+            seen.push(node.tagName.toLowerCase());
+          }
+        });
+        DOMPurify.sanitize('<x-keep>a</x-keep><div>b</div>', {
+          CUSTOM_ELEMENT_HANDLING: { tagNameCheck: /^x-/ },
+        });
+        DOMPurify.removeAllHooks();
+        assert.ok(
+          seen.includes('x-keep'),
+          `hook must fire on kept custom element, saw: ${seen.join(',')}`
+        );
+        assert.ok(seen.includes('div'), 'hook still fires on normal element');
+      }
+    );
+
+    QUnit.test(
+      'afterSanitizeElements policy applies uniformly to custom elements',
+      (assert) => {
+        DOMPurify.addHook('afterSanitizeElements', (node) => {
+          if (node.hasAttribute && node.hasAttribute('data-bio')) {
+            node.removeAttribute('data-bio');
+          }
+        });
+        const clean = DOMPurify.sanitize(
+          '<div data-bio="x"></div><x-bio data-bio="x"></x-bio>',
+          { CUSTOM_ELEMENT_HANDLING: { tagNameCheck: /^x-/ } }
+        );
+        DOMPurify.removeAllHooks();
+        assert.equal(clean, '<div></div><x-bio></x-bio>');
+      }
+    );
+
+    QUnit.test(
+      'afterSanitizeElements policy applies to custom elements kept via a tagNameCheck function',
+      (assert) => {
+        DOMPurify.addHook('afterSanitizeElements', (node) => {
+          if (node.hasAttribute && node.hasAttribute('data-bio')) {
+            node.removeAttribute('data-bio');
+          }
+        });
+        const clean = DOMPurify.sanitize(
+          '<x-bio data-bio="x"></x-bio><template><x-bio data-bio="x"></x-bio></template>',
+          {
+            CUSTOM_ELEMENT_HANDLING: {
+              tagNameCheck: (tagName) => /^x-/.test(tagName),
+            },
+          }
+        );
+        DOMPurify.removeAllHooks();
+        assert.ok(
+          /^<x-bio><\/x-bio>/.test(clean),
+          `custom element kept without data-bio, got: ${clean}`
+        );
+        assert.notOk(
+          /data-bio/.test(clean),
+          `hook policy applied to every kept custom element, got: ${clean}`
+        );
+      }
+    );
+
+    QUnit.test(
+      'afterSanitizeElements can remove a kept custom element',
+      (assert) => {
+        DOMPurify.addHook('afterSanitizeElements', (node) => {
+          if (node.tagName && node.tagName.toLowerCase() === 'x-evil') {
+            node.remove();
+          }
+        });
+        const clean = DOMPurify.sanitize('<x-evil>a</x-evil><x-ok>b</x-ok>', {
+          CUSTOM_ELEMENT_HANDLING: { tagNameCheck: /^x-/ },
+        });
+        DOMPurify.removeAllHooks();
+        assert.equal(clean, '<x-ok>b</x-ok>');
+      }
+    );
+
+    QUnit.test(
+      'kept custom element attributes are still sanitized (contract intact)',
+      (assert) => {
+        const clean = DOMPurify.sanitize(
+          '<x-a onclick="alert(1)" href="javascript:alert(1)"><img src=x onerror=alert(1)></x-a>',
+          { CUSTOM_ELEMENT_HANDLING: { tagNameCheck: /^x-/ } }
+        );
+        assert.notOk(/onclick/i.test(clean), 'event handler stripped');
+        assert.notOk(/javascript:/i.test(clean), 'javascript: URI stripped');
+        assert.notOk(/onerror/i.test(clean), 'child payload sanitized');
+      }
+    );
+
     QUnit.test('Test dirty being an array', function (assert) {
       assert.equal(
         DOMPurify.sanitize(['<a>123<b>456</b></a>']),
