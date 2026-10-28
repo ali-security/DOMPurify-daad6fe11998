@@ -1054,7 +1054,33 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
       // eslint-disable-next-line unicorn/prefer-dom-node-remove
       getParentNode(node).removeChild(node);
     } catch (_) {
+      /* The normal detach failed — this is reached for a parentless node
+         (getParentNode() is null, so .removeChild throws). Element.prototype
+         .remove() is itself a spec no-op on a parentless node, so a recorded
+         "removal" would otherwise hand the caller back an intact,
+         payload-bearing node (e.g. a detached IN_PLACE root the mXSS canary or
+         the style-with-element-child rule decided to kill). Fail closed by
+         throwing — exactly as a clobbered root does at the IN_PLACE entry —
+         rather than trying to "neutralize" the node via its own methods.
+         Neutralizing would mean calling getAttributeNames()/removeAttribute()
+         on the node, both of which a <form> root can clobber via a named child
+         (and _isClobbered does not even probe getAttributeNames), so the
+         neutralize step could itself be silently defeated, leaving the payload
+         intact. A throw touches only the cached, clobber-safe remove() and
+         getParentNode(). Generalizes GHSA-r47g-fvhr-h676 (clobbered-form root)
+         to every root-kill reason. REPORT-3.
+
+         This lives inside the catch, so it never fires for a normally-removed
+         in-tree node: those have a parent, removeChild() succeeds, and the
+         catch is not entered. Only a kept (parentless) root reaches here. */
       remove(node);
+
+      if (!getParentNode(node)) {
+        throw typeErrorCreate(
+          'a node selected for removal could not be detached from its tree ' +
+            'and cannot be safely returned; refusing to sanitize in place'
+        );
+      }
     }
   };
 
@@ -2371,6 +2397,32 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
 
     /* If we sanitized `dirty` in-place, return it. */
     if (IN_PLACE) {
+      /* Detect the one shape that cannot be made safe in place: the in-place
+         ROOT was itself force-removed during the walk (a rawtext root killed
+         by the mXSS canary, a <style> root with an element child, a root with
+         an invalid namespace, …). A root that still had a parent is detached
+         normally by _forceRemove (so the parentless-root throw there is not
+         reached) and, for a rawtext element, still carries a literal
+         `</tag>`-bearing text payload that the attribute pass does not touch,
+         so re-serialising and re-parsing the returned node re-opens the
+         markup. There is no safe node to hand back, so fail closed - identical
+         in spirit to the parentless-root throw in `_forceRemove` and the
+         clobbered-root throw at the IN_PLACE entry. Covers every present and
+         future root-kill reason in one check. */
+      let rootWasRemoved = false;
+      arrayForEach(DOMPurify.removed, (entry) => {
+        if (entry.element && entry.element === dirty) {
+          rootWasRemoved = true;
+        }
+      });
+
+      if (rootWasRemoved) {
+        throw typeErrorCreate(
+          'a node selected for removal could not be safely returned; ' +
+            'refusing to sanitize in place'
+        );
+      }
+
       if (SAFE_FOR_TEMPLATES) {
         _scrubTemplateExpressions(dirty as Element);
       }
