@@ -792,6 +792,30 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
       }
     }
 
+    /*
+     * Mirror the clone-before-mutate pattern already applied above for
+     * cfg.ADD_TAGS / cfg.ADD_ATTR: if any uponSanitize* hook is
+     * registered AND the set still points at the default constant,
+     * clone it. The hook then mutates the clone (in-call widening
+     * still works exactly as documented) and the next default-cfg
+     * call rebinds to the untouched original via the reassignment at
+     * the top of this function.
+     */
+    if (
+      (hooks.uponSanitizeElement.length > 0 ||
+        hooks.uponSanitizeAttribute.length > 0) &&
+      ALLOWED_TAGS === DEFAULT_ALLOWED_TAGS
+    ) {
+      ALLOWED_TAGS = clone(ALLOWED_TAGS);
+    }
+
+    if (
+      hooks.uponSanitizeAttribute.length > 0 &&
+      ALLOWED_ATTR === DEFAULT_ALLOWED_ATTR
+    ) {
+      ALLOWED_ATTR = clone(ALLOWED_ATTR);
+    }
+
     // Prevent further manipulation of configuration.
     // Not available in IE8, Safari 5, etc.
     if (freeze) {
@@ -1287,6 +1311,19 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
     /* Now let's check the element's type and name */
     const tagName = transformCaseFunc(currentNode.nodeName);
 
+    /*
+     * Same clone-before-mutate guard as in _parseConfig, for hooks that
+     * were registered mid-sanitize (e.g. from inside another hook) and
+     * therefore never passed through it: never hand the default
+     * allowlist constant to a hook that can write to data.allowedTags.
+     */
+    if (
+      hooks.uponSanitizeElement.length > 0 &&
+      ALLOWED_TAGS === DEFAULT_ALLOWED_TAGS
+    ) {
+      ALLOWED_TAGS = clone(ALLOWED_TAGS);
+    }
+
     /* Execute a hook if present */
     _executeHooks(hooks.uponSanitizeElement, currentNode, {
       tagName,
@@ -1580,6 +1617,20 @@ function createDOMPurify(window: WindowLike = getGlobal()): DOMPurify {
     /* Check if we have attributes; if not we might have a text node */
     if (!attributes || _isClobbered(currentNode)) {
       return;
+    }
+
+    /*
+     * Same clone-before-mutate guard as in _parseConfig, for hooks that
+     * were registered mid-sanitize (e.g. from inside another hook) and
+     * therefore never passed through it: never hand the default
+     * allowlist constant to a hook that can write to
+     * data.allowedAttributes.
+     */
+    if (
+      hooks.uponSanitizeAttribute.length > 0 &&
+      ALLOWED_ATTR === DEFAULT_ALLOWED_ATTR
+    ) {
+      ALLOWED_ATTR = clone(ALLOWED_ATTR);
     }
 
     const hookEvent = {
